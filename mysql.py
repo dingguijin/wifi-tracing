@@ -56,6 +56,12 @@ class Mysql:
     def query_calibration_by_value(self, value):
         q = self.session.query(distinct(CalibrationOriginal.calibration_timestamp_id)).filter(CalibrationOriginal.calibration_value == value)
         print q.count()
+        print type(q)
+        timestamp_list = []
+        for x in q:
+            print x
+            timestamp_list.append(x[0])
+        print timestamp_list
         return q
         
         
