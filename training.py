@@ -154,9 +154,11 @@ if __name__ == "__main__":
             one_time_ap_list = training_db.query_calibration_by_value_timestamp(v, t)
             all_times_ap_list.extend(one_time_ap_list)
             
+        #print all_times_ap_list
+
         training_ap_list = []
         for ap in all_times_ap_list:
-            if all_times_ap_list.count(ap) >= ap_no * 0.7:
+            if all_times_ap_list.count(ap) >= ap_no * 0.9:
                 if training_ap_list.count(ap) == 0:
                     training_ap_list.append(ap)
 
@@ -167,6 +169,7 @@ if __name__ == "__main__":
             
             ap_training_sum_value = 0.0
             for i in one_ap_value_list:
+                print (0.1 ** i)
                 ap_training_sum_value = ap_training_sum_value + (0.1 ** i)
 
             ap_training_value = ap_training_sum_value / len(one_ap_value_list)
