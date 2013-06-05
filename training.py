@@ -1,10 +1,16 @@
+# -*- coding: utf-8 -*-
+
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column
-from sqlalchemy.types import CHAR, Integer, String, DateTime, Numeric, Float
+#from sqlalchemy.types import CHAR, Integer, String, DateTime, Numeric, Float
+from sqlalchemy.types import *
 from sqlalchemy.schema import ForeignKey
 from sqlalchemy import distinct
+
+import numpy as np
+from scipy import stats
 
 import datetime
 import time
@@ -53,6 +59,21 @@ class Mysql:
         self.session.add(co)
         self.session.commit()
 
+
+    def insert_calibration_training(self, d):
+        co = CalibrationTraining(d["calibration_value"],
+                                 d["bssid"],
+                                 d["ap_value_mean"],
+                                 d["sigma"])
+                                 #d["cp_value"])
+        self.session.add(co)
+        self.session.commit()
+
+    def clear_calibration_training(self):
+        self.session.query(CalibrationTraining).delete()
+        self.session.commit()
+
+
     #select all value from calibration.
     def query_calibration_value(self):
         q = self.session.query(distinct(CalibrationOriginal.calibration_value))
@@ -62,7 +83,6 @@ class Mysql:
             value_list.append(v[0])
 
         return value_list
-
         
     def query_calibration_by_value(self, value):
         q = self.session.query(distinct(CalibrationOriginal.calibration_timestamp_id)).filter(CalibrationOriginal.calibration_value == value)
@@ -74,7 +94,7 @@ class Mysql:
         return timestamp_list
 
     def query_calibration_by_value_timestamp(self, value, timestamp):
-        q = self.session.query(CalibrationOriginal.bssid, CalibrationOriginal.signal_strength).filter(CalibrationOriginal.calibration_value == value, CalibrationOriginal.calibration_timestamp_id == timestamp, CalibrationOriginal.signal_strength <= -35, CalibrationOriginal.signal_strength >= -95)
+        q = self.session.query(CalibrationOriginal.bssid, CalibrationOriginal.signal_strength).filter(CalibrationOriginal.calibration_value == value, CalibrationOriginal.calibration_timestamp_id == timestamp, CalibrationOriginal.signal_strength <= -30, CalibrationOriginal.signal_strength >= -100)
 
         ap_list = []
         for ap in q:
@@ -133,15 +153,44 @@ class CalibrationOriginal(BaseModel):
         d["calibration_timestamp_id"] = self.calibration_timestamp_id
         return str(d)
 
+class CalibrationTraining(BaseModel):
+    __tablename__ = 'calibration_training'
+
+    id = Column('id', Integer, primary_key = True)
+    calibration_value = Column("calibration_value", Integer)
+    ap_bssid = Column("bssid", String(256))
+    ap_value_mean = Column("calibration_ap_value_mean", Numeric(25, 17))
+    sigma = Column("sigma", Numeric(25, 17))
+    #cp_value = Column("cp_value", Numeric(30, 10))
+
+    def __init__(self, calibration_value, ap_bssid, ap_value_mean, sigma): #, cp_value):
+        self.calibration_value = calibration_value
+        self.ap_bssid = ap_bssid
+        self.ap_value_mean = ap_value_mean
+        self.sigma = sigma
+        #self.cp_value = cp_value
+
+    def __repr__(self):
+        d = {}
+        d['calibration_value'] = self.calibration_value
+        d['bssid'] = self.ap_bssid
+        d['ap_value_mean'] = self.ap_value_mean
+        d['sigma'] = self.sigma
+        #d['cp_value'] = self.cp_value
+        return str(d)
 
 
 
-if __name__ == "__main__":
-    training_db = Mysql()
-    training_db.open_session()
 
+def gaussian_cp(x, xmean, sigma):
+    y = ((2.0 * np.pi) ** (-1.0/2.0)) * (np.e ** (((-1.0/2.0) * ((x - xmean) ** 2.0)) / (sigma ** 2.0)))
+    return y
+
+def training_ap(training_db):
+    training_db.clear_calibration_training()
     value_list = training_db.query_calibration_value()
 
+    #选择同一个房间号对应的所有采样时间点
     for v in value_list:
         print "Value : %d" % v
         timestamp_list = training_db.query_calibration_by_value(v)
@@ -149,12 +198,12 @@ if __name__ == "__main__":
 
         print "This value timesstamp Number : %d" % ap_no
 
+        #选择同一个房间同一个时间采样点中的所有有效AP
         all_times_ap_list = []
         for t in timestamp_list:
             one_time_ap_list = training_db.query_calibration_by_value_timestamp(v, t)
             all_times_ap_list.extend(one_time_ap_list)
             
-        #print all_times_ap_list
 
         training_ap_list = []
         for ap in all_times_ap_list:
@@ -164,16 +213,80 @@ if __name__ == "__main__":
 
         print "Training AP Number : %d" % len(training_ap_list)
 
+        #开始计算该房间号中所有有效AP的分布概率
         for ap in training_ap_list:
             one_ap_value_list = training_db.query_calibration_by_value_bssid(v, ap)
+            one_ap_value_array_src = np.array(one_ap_value_list, dtype = np.float64)
+            one_ap_value_array_des = np.array(one_ap_value_list, dtype = np.float64)
+            one_ap_sigma_array = np.array(one_ap_value_list, dtype = np.float64)
             
-            ap_training_sum_value = 0.0
-            for i in one_ap_value_list:
-                print (0.1 ** i)
-                ap_training_sum_value = ap_training_sum_value + (0.1 ** i)
+            print "AP list is : %s" % one_ap_value_array_src
 
-            ap_training_value = ap_training_sum_value / len(one_ap_value_list)
-            print "AP bssid : %s => %f" % (ap, ap_training_value)
+            #计算AP的物理信号值
+            i = 0
+            for j in one_ap_value_array_des:
+                one_ap_value_array_des[i] = 10.0 ** (j / 10.0)
+                i = i + 1
+
+            #计算该房间区域内的AP信号平均值
+            one_ap_value_mean = 10 * np.log10(one_ap_value_array_des.mean())
+
+            print "One AP value mean is : %e" % one_ap_value_mean
+
+            #根据信号平均值计算出各AP在该房间区域内的方差
+            i = 0
+            for j in one_ap_sigma_array:
+                one_ap_sigma_array[i] = (one_ap_value_mean - one_ap_sigma_array[i]) ** 2.0
+                i = i + 1
+
+            one_ap_sigma_value = one_ap_sigma_array.mean()
+            print "One AP sigma1 is : %e" % one_ap_sigma_value
+            print "One AP sigma2 is : %e" % one_ap_sigma_value ** (1.0 / 2.0)
+
+            #根据该房间内的AP信号平均值和方差计算各个AP在该区域内的概率密度
+            #for j in one_ap_value_array_src:
+            #    print j
+            #    print "CP is : %e" % gaussian_cp(j, one_ap_value_mean, one_ap_sigma_value)
+
+            #print "%e" % gaussian_cp(one_ap_value_mean, one_ap_value_mean, one_ap_sigma_value)
+
+            #将区域ID与其对应的AP平均值和方差值存入数据库
+
+            d = {}
+            d['calibration_value'] = v
+            d['bssid'] = ap
+            d['ap_value_mean'] = float(one_ap_value_mean)
+            d['sigma'] = float(one_ap_sigma_value)
+            #d['cp_value'] = float(gaussian_cp(one_ap_value_mean, one_ap_value_mean, one_ap_sigma_value))
+            training_db.insert_calibration_training(d)
 
 
+def calibration_point(training_db):
+    #从源数据库中得到区域ID和该区域的采样时间点
+    value_list = training_db.query_calibration_value()
+    print value_list
+
+    #从源数据库中根据区域ID和该区域的采样时间点得到相应的bssid和AP值
+    for v in value_list:
+        print "Value : %d" % v
+        timestamp_list = training_db.query_calibration_by_value(v)
+        ap_no = len(timestamp_list)
+
+        print "This value timesstamp Number : %d" % ap_no
+
+        #选择同一个房间同一个时间采样点中的所有有效AP
+        all_times_ap_list = []
+        for t in timestamp_list:
+            one_time_ap_list = training_db.query_calibration_by_value_timestamp(v, t)
+            print "One value one times AP is : %s" % one_time_ap_list
+
+            #开始计算概率......
+
+
+if __name__ == "__main__":
+    training_db = Mysql()
+    #training_db.init_db()
+    training_db.open_session()
+    training_ap(training_db)
+    calibration_point(training_db)
     training_db.close_session()
