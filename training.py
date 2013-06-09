@@ -9,6 +9,7 @@ from sqlalchemy.types import *
 from sqlalchemy.schema import ForeignKey
 from sqlalchemy import distinct
 
+from sklearn import svm
 import numpy as np
 from scipy import stats
 
@@ -102,6 +103,15 @@ class Mysql:
 
         return training_ap_list
 
+    def query_training_ap_by_value2(self, value):
+        q = self.session.query(CalibrationTraining.ap_bssid, CalibrationTraining.ap_value_mean).filter(CalibrationTraining.calibration_value == value)
+
+        training_ap_list = []
+        for t in q:
+            training_ap_list.append([t[0], t[1]])
+
+        return training_ap_list
+
     def query_training_by_value_ap(self, value, ap):
         q = self.session.query(CalibrationTraining.ap_value_mean, CalibrationTraining.sigma).filter(CalibrationTraining.calibration_value == value, CalibrationTraining.ap_bssid == ap)
         mean_sigma_list = np.array(q[0], dtype = np.float64) 
@@ -117,7 +127,8 @@ class Mysql:
         return timestamp_list
 
     def query_calibration_by_value_timestamp2(self, value, timestamp):
-        q = self.session.query(CalibrationOriginal.bssid, CalibrationOriginal.signal_strength).filter(CalibrationOriginal.calibration_value == value, CalibrationOriginal.calibration_timestamp_id == timestamp, CalibrationOriginal.signal_strength <= -30, CalibrationOriginal.signal_strength >= -100)
+        #q = self.session.query(CalibrationOriginal.bssid, CalibrationOriginal.signal_strength).filter(CalibrationOriginal.calibration_value == value, CalibrationOriginal.calibration_timestamp_id == timestamp, CalibrationOriginal.signal_strength <= -30, CalibrationOriginal.signal_strength >= -100)
+        q = self.session.query(CalibrationOriginal.bssid, CalibrationOriginal.signal_strength).filter(CalibrationOriginal.calibration_value == value, CalibrationOriginal.calibration_timestamp_id == timestamp)
 
         ap_signal_list = []
         for ap in q:
@@ -221,18 +232,21 @@ def gaussian_cp(x, xmean, sigma):
     return y
 
 def training_ap(training_db):
+    #清空校准表
     training_db.clear_calibration_training()
+
+    #得到所有采样区域
     value_list = training_db.query_calibration_value()
 
-    #选择同一个房间号对应的所有采样时间点
+    #选择一个区域内对应的所有采样时间点
     for v in value_list:
-        print "Value : %d" % v
+        #print "Value : %d" % v
         timestamp_list = training_db.query_calibration_by_value(v)
         ap_no = len(timestamp_list)
 
-        print "This value timesstamp Number : %d" % ap_no
+        #print "This value timesstamp Number : %d" % ap_no
 
-        #选择同一个房间同一个时间采样点中的所有有效AP
+        #选择同一个区域内一个时间采样点中的所有有效AP
         all_times_ap_list = []
         for t in timestamp_list:
             one_time_ap_list = training_db.query_calibration_by_value_timestamp(v, t)
@@ -245,7 +259,7 @@ def training_ap(training_db):
                 if training_ap_list.count(ap) == 0:
                     training_ap_list.append(ap)
 
-        print "Training AP Number : %d" % len(training_ap_list)
+        #print "Training AP Number : %d" % len(training_ap_list)
 
         #开始计算该房间号中所有有效AP的分布概率
         for ap in training_ap_list:
@@ -254,7 +268,7 @@ def training_ap(training_db):
             one_ap_value_array_des = np.array(one_ap_value_list, dtype = np.float64)
             one_ap_sigma_array = np.array(one_ap_value_list, dtype = np.float64)
             
-            print "AP list is : %s" % one_ap_value_array_src
+            #print "AP list is : %s" % one_ap_value_array_src
 
             #计算AP的物理信号值
             i = 0
@@ -265,7 +279,7 @@ def training_ap(training_db):
             #计算该房间区域内的AP信号平均值
             one_ap_value_mean = np.float64(10.0 * np.log10(one_ap_value_array_des.mean()))
 
-            print "One AP value mean is : %e" % one_ap_value_mean
+            #print "One AP value mean is : %e" % one_ap_value_mean
 
             #根据信号平均值计算出各AP在该房间区域内的方差
             i = 0
@@ -280,8 +294,8 @@ def training_ap(training_db):
             one_ap_sigma_value = np.float64(sigma_sum / (len(one_ap_sigma_array) - 1))
             #one_ap_sigma_value = np.float64(sigma_sum / len(one_ap_sigma_array))
             #one_ap_sigma_value = one_ap_sigma_array.mean()
-            print "One AP sigma1 is : %e" % one_ap_sigma_value
-            print "One AP sigma2 is : %e" % one_ap_sigma_value ** (1.0 / 2.0)
+            #print "One AP sigma1 is : %e" % one_ap_sigma_value
+            #print "One AP sigma2 is : %e" % one_ap_sigma_value ** (1.0 / 2.0)
 
             #将区域ID与其对应的AP平均值和方差值存入数据库
             d = {}
@@ -292,11 +306,63 @@ def training_ap(training_db):
             training_db.insert_calibration_training(d)
 
 
+def calibration_svm(training_db, src_ap_list, src_ap_signal_list, cp_list_v):
+    cp_max = cp_list_v[-1]
+    cp_max2 = cp_list_v[-2]
+    #print "src_ap_list :", src_ap_list
+    #print "src_ap_signal_list :", src_ap_signal_list
+    #print "cp_max :", cp_max, "cp_max2 :", cp_max2
+
+    training_ap_list = training_db.query_training_ap_by_value2(cp_max[1])
+    #print "training_ap_list :", training_ap_list
+    training_ap_list2 = training_db.query_training_ap_by_value2(cp_max2[1])
+    #print "training_ap_list2 :", training_ap_list2
+    
+    cp_list_t = []
+    for cp in training_ap_list:
+        for cp_t in training_ap_list2:
+            if cp[0] == cp_t[0]:
+                cp_list_t.append(cp[0])
+
+    #print "cp_list_t :", cp_list_t
+
+    cp_mean_list = []
+    cp_mean_list2 = []
+    src_list = []
+    for cp in cp_list_t:
+        for cp_t in training_ap_list:
+            if cp == cp_t[0]:
+                cp_mean_list.append(cp_t[1])
+
+        for cp_t2 in training_ap_list2:
+            if cp == cp_t2[0]:
+                cp_mean_list2.append(cp_t2[1])
+
+        i = 0
+        for src in src_ap_list:
+            if cp == src:
+                src_list.append(src_ap_signal_list[i][1])
+            i = i + 1
+
+    #print "cp_mean_list :", cp_mean_list
+    #print "cp_mean_list2 :", cp_mean_list2
+    #print "src_list :", src_list
+
+    cp_mean_array1 = np.array(cp_mean_list, dtype=np.float64)
+    cp_mean_array2 = np.array(cp_mean_list2, dtype=np.float64)
+    cp_mean_array = np.array([cp_mean_array1, cp_mean_array2])
+    svc = svm.SVC(kernel='rbf')
+    svc.fit(cp_mean_array, [np.float64(cp_max[1]), np.float64(cp_max2[1])])
+
+    ret = svc.predict(np.array(src_list, dtype=np.float64))
+    print ret
+
 def calibration_compute(training_db, src_ap_list, src_ap_signal_list):
 
     ret = {'value':-1, 'CP':0.0}
 
     cp_list = []
+    cp_list_v = []
     cp_f = np.float64(0.0)
     training_value_list = training_db.query_training_value()
     for v in training_value_list:
@@ -314,7 +380,7 @@ def calibration_compute(training_db, src_ap_list, src_ap_signal_list):
             for ap in training_ap_list:
                 if src_ap == ap:
                     mean_sigma = training_db.query_training_by_value_ap(v, ap)
-            
+                    
             #计算源AP信号值与对应于训练表中AP的概率
             cp_t = np.float64(gaussian_cp(np.float64(src_ap_signal_list[i][1]), np.float64(mean_sigma[0]), np.float64(mean_sigma[1])))
             cp = cp + np.float64(cp_t)
@@ -323,24 +389,31 @@ def calibration_compute(training_db, src_ap_list, src_ap_signal_list):
         #print "value = %s cp = %e" % (v, cp)
         
         cp_list.append(np.float64(cp))
+        cp_list_v.append([np.float64(cp), v])
 
         if ret['CP'] < cp:
             ret['value'] = v
             ret['CP'] = cp
 
+    cp_list_v.sort()
+    #print cp_list_v
     cp_list.sort()
     #print "cp_list :", cp_list
     cp_max = np.float64(cp_list[-1])
+    cp_max_v = cp_list_v[-1][1]
     cp_max2 = np.float64(cp_list[-2])
-    #print "cp_max :", cp_max, "cp_max2 :", cp_max2
+    cp_max2_v = cp_list_v[-2][1]
+    #print "cp_max :", cp_max, "cp_max_v :", cp_max_v
+    #print "cp_max2 :", cp_max2, "cp_max2_v :", cp_max2_v
 
     if cp_max2 != 0.0:
         cp_f = (cp_max - cp_max2) / cp_max2
-        print "cp_f :", cp_f
+        #print "cp_f :", cp_f
 
     if cp_f > 0 and cp_f < 0.15:
         ret['value'] = -1
         ret['CP'] = -1
+        calibration_svm(training_db, src_ap_list, src_ap_signal_list, cp_list_v)
 
     return ret
 
@@ -348,7 +421,7 @@ def calibration_compute(training_db, src_ap_list, src_ap_signal_list):
 def calibration_point(training_db):
     #从源数据库中得到区域ID和该区域的采样时间点
     value_list = training_db.query_calibration_value()
-    print value_list
+    #print value_list
 
     #从源数据库中根据区域ID和该区域的采样时间点得到相应的bssid和AP值
     for v in value_list:
@@ -358,7 +431,7 @@ def calibration_point(training_db):
 
         #print "This value timesstamp Number : %d" % ap_no
 
-        #选择同一个房间同一个时间采样点中的所有有效AP
+        #选择一个区域中同一个时间采样点中的所有AP
         all_times_ap_list = []
         for t in timestamp_list:
             one_time_ap_list = training_db.query_calibration_by_value_timestamp(v, t)
