@@ -59,6 +59,15 @@ class Mysql:
         self.session.add(co)
         self.session.commit()
 
+    def clear_calibration(self, sql):
+        self.session.execute(sql)
+
+    def create_table(self, sql):
+        self.session.execute(sql)
+
+    def insert_calibration(self, sql):
+        self.session.execute(sql)
+
     def query_calibration(self, sql):
         q = self.session.execute(sql)
 
@@ -122,18 +131,20 @@ class CalibrationOriginal(BaseModel):
 ########################################################################
 
 def calibration_training():
+    db.clear_calibration("delete from calibration_training")
+
     #得到所有采样区域
-    value = src_db.query_calibration("select distinct calibration_value \
+    value = db.query_calibration("select distinct calibration_value \
                                       from calibration_original")
     for v in value:
         #得到一个区域采集的时间点
-        time_id = src_db.query_calibration("select distinct calibration_timestamp_id \
+        time_id = db.query_calibration("select distinct calibration_timestamp_id \
                                             from calibration_original \
                                             where calibration_value = %d" % v)
         #得到一个区域一次采集到的AP物理地址
         ap_all_list = []
         for t in time_id:
-            bssid = src_db.query_calibration("select bssid \
+            bssid = db.query_calibration("select bssid \
                                               from calibration_original \
                                               where calibration_value = %d and calibration_timestamp_id = %d" % (v, t))
             ap_all_list.extend(bssid)
@@ -149,7 +160,7 @@ def calibration_training():
         sigma_list = []
         for ap in ap_training_list:
             #根据区域和选出的有效AP 得到该AP的所有信号指数
-            s = src_db.query_calibration("select signal_strength \
+            s = db.query_calibration("select signal_strength \
                                          from calibration_original \
                                          where calibration_value = %d and bssid = \'%s\'" % (v, ap))
 
@@ -159,35 +170,175 @@ def calibration_training():
             #将信号指数计算成物理信号值
             i = 0
             for s_t in signal_array:
-                signal_array[i] = 10 ** (s_t / 10)
+                signal_array[i] = np.float64(10.0 ** (s_t / 10.0))
                 i = i + 1
                 
             #计算出一个AP的平均物理信号值 再还原为该AP的平均信号指数
-            signal_mean = 10 * np.log10(signal_array.mean())
+            signal_mean = np.float64(10 * np.log10(signal_array.mean()))
 
             #根据AP的平均信号指数计算出AP的信号方差
             sigma = np.float64(0.0)
             for j in s:
                 sigma = sigma + np.float64((j - signal_mean) ** 2.0)
 
+            sigma = sigma / np.float64(len(signal_src_array) - 1)
+
             #将AP的信号平均指数和方差保存为列表
-            signal_mean_list.append(signal_mean)
-            sigma_list.append(sigma / np.float64(len(signal_src_array) - 1))
+            #signal_mean_list.appden(signal_mean)
+            #sigma_list.append(sigma)
 
-        print "value :", v, "ap_training_list len :", len(ap_training_list)
-        print "signal mean:", signal_mean_list
-        print "sigma :", sigma_list
+            #将校准数据存入数据库
+            print "Insert : ", v, ap, signal_mean, sigma
+            db.insert_calibration("insert into calibration_training \
+                                   values (0, %s, \'%s\', %s, %s)" % (v, ap, signal_mean, sigma))
 
-        #将校准数据存入数据库
+
+def calibration_training2():
+    #db.create_table("create table new_training (value bigint, ap_ref char(255), ap_d double, bssid char(255), mean double, sigma double)")
+
+    db.insert_calibration("delete from new_training")
+
+    #得到所有采样区域
+    value = db.query_calibration("select distinct calibration_value \
+                                      from calibration_original")
+
+    training_ap_list = []
+    for v in value:
+        #得到一个区域采集的时间点
+        time_id = db.query_calibration("select distinct calibration_timestamp_id \
+                                            from calibration_original \
+                                            where calibration_value = %d" % v)
+
+        #得到一个区域一次采集到的AP物理地址
+        ap_max_list = []
+        for t in time_id:
+            bssid = db.query_calibration("select bssid \
+                                              from calibration_original \
+                                              where calibration_value = %d and calibration_timestamp_id = %d \
+                                              order by signal_strength desc" % (v, t))
+            ap_max_list.append(bssid[0])
+
+        #得到该区域信号最强的AP 作为基准AP
+        for ap in ap_max_list:
+            if ap_max_list.count(ap) > (len(ap_max_list) / 2):
+                ap_ref = ap
+                break
+
+        #得到一个区域一次采集到的AP物理地址
+        ap_all_list = db.query_calibration("select distinct bssid \
+                                              from calibration_original \
+                                              where calibration_value = %d" % v)
+
+        training_ap_list_t =[]
+        for ap in ap_all_list:
+            #根据区域和选出的AP 得到该AP的所有信号指数
+            s = db.query_calibration("select signal_strength \
+                                         from calibration_original \
+                                         where calibration_value = %d and bssid = \'%s\'" % (v, ap))
+
+            if len(s) <= 1: continue
+
+            signal_src_array = np.array(s, dtype = np.float64)
+            signal_array = np.array(s, dtype = np.float64)
+
+            #将信号指数计算成物理信号值
+            i = 0
+            for s_t in signal_array:
+                signal_array[i] = np.float64(10.0 ** (s_t / 10.0))
+                i = i + 1
+                
+            #计算出一个AP的平均物理信号值 再还原为该AP的平均信号指数
+            signal_mean = np.float64(10 * np.log10(signal_array.mean()))
+
+            sigma = np.float64(0.0)
+            for j in signal_src_array:
+                sigma = sigma + np.float64((j - signal_mean) ** 2.0)
+
+            sigma = sigma / np.float64(len(signal_src_array) - 1)
+            if sigma == 0.0 : continue
+
+            training_ap_list_t.append([ap, signal_mean, sigma])
+
         
+        for i in training_ap_list_t:
+            if i[0] == ap_ref:
+                ap_ref_v = i[1]
+
+        for i in training_ap_list_t:
+            ap_d = i[1] - ap_ref_v
+            training_ap_list.append([v, ap_ref, ap_d, i[0], i[1], i[2]])
+
+    for i in training_ap_list:
+        db.insert_calibration("insert into new_training \
+                               values (%s, \'%s\', %s, \'%s\', %s, %s)" % (i[0], i[1], i[2], i[3], i[4], i[5]))
+
+
+def gaussian_cp(x, xmean, sigma):
+    X = stats.norm(loc = np.float64(xmean), scale = np.float64(sigma))
+    Y = X.pdf(np.float64(x))
+
+    return Y
+
+
+def calibration_normal(ap_list):
+    value =  db.query_calibration("select distinct calibration_value \
+                                      from calibration_training")
+
+    cp_list = []
+    for v in value:
+        training_ap_list = db.query_calibration3("select bssid, calibration_ap_value_mean, sigma \
+                                                 from calibration_training \
+                                                 where calibration_value = %s" % v)
+
+        cp = np.float64(0.0)
+        for ap in ap_list:
+            for ap_t in training_ap_list:
+                if ap[0] == ap_t[0]:
+                    cp = cp + gaussian_cp(ap[1], ap_t[1], ap_t[2])
+
+        cp_list.append([cp, v])
+
+    cp_list.sort()
+
+    if cp_list[-1][0] == 0.0 or ((cp_list[-1][0] - cp_list[-2][0]) / cp_list[-1][0]) < 0.1:
+        cp_value = -1
+    else:
+        cp_value = cp_list[-1][1]
+
+    return cp_value
 
 def calibration_core():
-    pass
+    #得到所有待测区域
+    value = db.query_calibration("select distinct calibration_value \
+                                      from calibration_original")
+    for v in value:
+        #得到一个待测区域采集的时间点
+        time_id = db.query_calibration("select distinct calibration_timestamp_id \
+                                            from calibration_original \
+                                            where calibration_value = %d" % v)
+        #得到一个待测区域一次采集到的AP物理地址
+        for t in time_id:
+            bssid = db.query_calibration("select bssid, signal_strength \
+                                              from calibration_original \
+                                              where calibration_value = %d and calibration_timestamp_id = %d" % (v, t))
+
+            ap_list = []
+            for ap in bssid:
+                ap_list.extend(db.query_calibration2("select bssid, signal_strength \
+                                              from calibration_original \
+                                              where calibration_value = %s and calibration_timestamp_id = %s and bssid = \'%s\'" % (v, t, ap)))
+
+            #print v, t, ap_list
+            ret = calibration_normal(ap_list)
+            print "Src : ", v, t, " <==========> ", "CP return : ", ret
+            
+        print ""
 
 if __name__ == "__main__":
-    src_db = Mysql()
-    src_db.open_session()
-    calibration_training()
-    calibration_core()
-    src_db.close_session()
+    db = Mysql()
+    db.open_session()
+    #calibration_training()
+    calibration_training2()
+    #calibration_core()
+    db.close_session()
 
