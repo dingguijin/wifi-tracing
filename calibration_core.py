@@ -271,7 +271,7 @@ def calibration_training2():
     for i in training_ap_list:
         db.insert_calibration("insert into new_training \
                                values (%s, \'%s\', %s, \'%s\', %s, %s)" % (i[0], i[1], i[2], i[3], i[4], i[5]))
-
+        print i
 
 def gaussian_cp(x, xmean, sigma):
     X = stats.norm(loc = np.float64(xmean), scale = np.float64(sigma))
