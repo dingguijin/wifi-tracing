@@ -94,6 +94,15 @@ class Mysql:
             ret.append([line[0], line[1], line[2]])
 
         return ret
+
+    def query_calibration4(self, sql):
+        q = self.session.execute(sql)
+
+        ret = []
+        for line in q:
+            ret.append([line[0], line[1], line[2], line[3]])
+
+        return ret
         
 #------------------------------------------------------------------------------
         
@@ -271,13 +280,59 @@ def calibration_training2():
     for i in training_ap_list:
         db.insert_calibration("insert into new_training \
                                values (%s, \'%s\', %s, \'%s\', %s, %s)" % (i[0], i[1], i[2], i[3], i[4], i[5]))
-        print i
+        #print i
 
 def gaussian_cp(x, xmean, sigma):
     X = stats.norm(loc = np.float64(xmean), scale = np.float64(sigma))
     Y = X.pdf(np.float64(x))
 
     return Y
+
+
+def d_normal(lp_list, index, cp_list):
+    ref_v = lp_list[index][1]
+
+    ap_list = []
+    i = 0
+    for ap in lp_list:
+        ap_list.append([ap[0], (ap[1] - ref_v)])
+
+    cp = np.float64(0.0)
+    for ap in ap_list:
+        for ap_t in cp_list:
+            if ap[0] == ap_t[1]:
+                cp = cp + gaussian_cp(ap[1], ap_t[2], ap_t[3])
+                
+    return cp
+
+
+def calibration_normal2(ap_list):
+    ret = None
+    ret_v = -1
+
+    value =  db.query_calibration("select distinct value \
+                                      from new_training")
+
+    for v in value:
+        training_ap_list = db.query_calibration4("select ap_ref, bssid, ap_d, sigma \
+                                                 from new_training \
+                                                 where value = %s" % v)
+
+        i = 0
+        ref_v = training_ap_list[0][0]
+        for ap in ap_list:
+            if ap[0] == ref_v:
+                t = np.float64(d_normal(ap_list, i, training_ap_list))
+                if ret_v < t:
+                    ret_v = t
+                    ret = v
+                    break
+                else:
+                    continue
+                    
+            i = i + 1
+            
+    return ret
 
 
 def calibration_normal(ap_list):
@@ -329,9 +384,13 @@ def calibration_core():
                                               where calibration_value = %s and calibration_timestamp_id = %s and bssid = \'%s\'" % (v, t, ap)))
 
             #print v, t, ap_list
-            ret = calibration_normal(ap_list)
-            print "Src : ", v, t, " <==========> ", "CP return : ", ret
-            
+            #ret = calibration_normal(ap_list)
+            ret = calibration_normal2(ap_list)
+            if ret == None:
+                print "This value ", v, " time ", t, " can not calibration!"
+            else:
+                print "Src : ", v, t, " <==========> ", "CP return : ", ret
+                
         print ""
 
 if __name__ == "__main__":
@@ -339,6 +398,6 @@ if __name__ == "__main__":
     db.open_session()
     #calibration_training()
     calibration_training2()
-    #calibration_core()
+    calibration_core()
     db.close_session()
 
