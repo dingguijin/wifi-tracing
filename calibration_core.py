@@ -229,14 +229,23 @@ def calibration_training2():
 
         #得到该区域信号最强的AP 作为基准AP
         for ap in ap_max_list:
-            if ap_max_list.count(ap) > (len(ap_max_list) / 2):
+            if ap_max_list.count(ap) >= (len(ap_max_list) / 2):
                 ap_ref = ap
                 break
 
         #得到一个区域一次采集到的AP物理地址
-        ap_all_list = db.query_calibration("select distinct bssid \
+        ap_list_t = db.query_calibration("select distinct bssid \
                                               from calibration_original \
                                               where calibration_value = %d" % v)
+
+        ap_all_list_t = db.query_calibration("select bssid \
+                                              from calibration_original \
+                                              where calibration_value = %d" % v)
+        
+        ap_all_list = []
+        for ap in ap_list_t:
+            if ap_all_list_t.count(ap) >= len(time_id) * 0.6:
+                ap_all_list.append(ap)
 
         training_ap_list_t =[]
         for ap in ap_all_list:
@@ -309,6 +318,7 @@ def d_normal(lp_list, index, cp_list):
 def calibration_normal2(ap_list):
     ret = None
     ret_v = -1
+    ret_list = []
 
     value =  db.query_calibration("select distinct value \
                                       from new_training")
@@ -323,16 +333,19 @@ def calibration_normal2(ap_list):
         for ap in ap_list:
             if ap[0] == ref_v:
                 t = np.float64(d_normal(ap_list, i, training_ap_list))
-                if ret_v < t:
-                    ret_v = t
-                    ret = v
-                    break
-                else:
-                    continue
+                ret_list.append([t, v])
+                break
+            else:
+                continue
                     
             i = i + 1
-            
-    return ret
+
+    if ret_list == []:
+        return None
+    else:
+        ret_list.sort()
+        print ret_list
+        return ret_list[-1][1]
 
 
 def calibration_normal(ap_list):
