@@ -1,8 +1,8 @@
 #!/bin/env python
 # -*- coding: utf-8 -*-
 
-import numpy as np
 import db
+import numpy as np
 
 def print_ret(ret):
     for t in ret:
@@ -18,34 +18,35 @@ def lookup_onevalue(number4v, bssid4v, times_number4v):
                from calibration_original \
                where calibration_value = %s and \
                      bssid = \'%s\' and \
-                     signal_strength > %s"
-        bssid_number4vt = int(src_db.execute_sql_ret1(sql % (number4v, bv, -100))[0])
-        if bssid_number4vt < times_number4v - 2:
+                     signal_strength >= %s"
+        bssid_number4vt = int(src_db.execute_sql_ret1(sql % (number4v, bv, -99))[0])
+        #if bssid_number4vt < times_number4v * 0.9:
+        if bssid_number4vt < 4 :
             continue
             
         sql = "select signal_strength \
                from calibration_original \
                where calibration_value = %s and \
                      bssid = \'%s\' and \
-                     signal_strength > %s \
+                     signal_strength >= %s \
                order by signal_strength desc"
         signal_list = src_db.execute_sql_ret1(sql % (number4v, bv, -100))
-        signal_array = np.array(signal_list, dtype = np.float64)
 
-        i = 0
-        for s in signal_array:
-            signal_array[i] = 10.0 ** (np.float64(s) / 10.0)
-            i = i + 1
-            
-        signal_mean = 10 * np.log10(signal_array.sum() / len(signal_array))
-
-        sigma = np.float64(0.0)
+        sum = np.double(0.0)
         for s in signal_list:
-            sigma = sigma + (s - signal_mean) ** 2.0
-            
-        sigma = sigma / len(signal_list)
-        
-        finish_list.append([signal_mean, bv, sigma])
+            sum = sum + 10.0 ** (np.float64(s) / 10.0)
+
+        signal_mean = sum / len(signal_list)
+        signal_mean = 10 * np.log10(signal_mean)
+
+        sigma2sum = np.double(0.0)
+        for s in signal_list:
+            sigma2sum = sigma2sum + (s - signal_mean) ** 2.0
+
+        sigma2 = sigma2sum / (len(signal_list) - 1)
+        if sigma2 == 0: continue
+
+        finish_list.append([signal_mean, bv, sigma2])
 
     return finish_list
 
@@ -66,12 +67,6 @@ def make_src_db(src_db, number4v):
         finish_list = lookup_onevalue(nv, bssid4v, times_number4v)
         finish_list.sort()
         finish_list.reverse()
-        ref = finish_list[0][0]
-
-        i = 0
-        for line in finish_list:
-            finish_list[i][0] = line[0] - ref
-            i = i + 1
 
         sql = "insert training values (%s, \'%s\', %s, %s)"
         for line in finish_list:
