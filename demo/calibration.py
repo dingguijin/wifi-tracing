@@ -107,8 +107,10 @@ if __name__ == "__main__":
 
     ap4vt_list = example.get_example_ap(src_db)
     for onetime_aplist in ap4vt_list:
-        calibration_value = do_calibration(src_db, onetime_aplist)
-        print "Src value : ", onetime_aplist[0][0], " <=========> ", "Calibration value : ", calibration_value 
+        #calibration_value = do_calibration(src_db, onetime_aplist)
+        #print "Src value : ", onetime_aplist[0][0], " <=========> ", "Calibration value : ", calibration_value 
+        print "Src value : ", onetime_aplist[0][0] 
+	realCalibration(onetime_aplist)
 
     src_db.close_session()
 
